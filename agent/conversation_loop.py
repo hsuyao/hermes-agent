@@ -466,6 +466,7 @@ def run_conversation(
                 _cfg = yaml.safe_load(_f)
             _hl = (_cfg or {}).get("high_llm_loop", {})
             if _hl.get("enabled") and _hl.get("force"):
+                logger.info("dual-layer: pre-loop inject triggered (profile=%s)", _profile_name)
                 import sys as _sys
                 _dl_path = "/home/eric/.hermes/work/dual-layer-llm-architect"
                 if _dl_path not in _sys.path:
@@ -3905,6 +3906,9 @@ def run_conversation(
                     from high_llm_loop import call_llm as _dl_call, get_high_llm_config as _dl_hcfg, get_provider_url_and_key as _dl_puk, build_api_url as _dl_burl
                     _dl_cfg = _dl_hcfg(_profile_name or "default")
                     if _dl_cfg.get("enabled") and _dl_cfg.get("force"):
+                        logger.info("dual-layer: feedback loop triggered (profile=%s, tool_results=%d)", 
+                                     _profile_name or "default", 
+                                     sum(1 for _m in messages if _m.get("role") == "tool"))
                         _dl_p = _dl_puk(_dl_cfg.get("provider", "gemini-web2api"), _profile_name or "default")
                         _dl_url = _dl_burl(_dl_p.get("base_url", "http://127.0.0.1:4981/v1"))
                         # Collect last tool results
