@@ -439,7 +439,23 @@ def run_conversation(
     _dual_layer_msg = None
     try:
         from hermes_constants import get_hermes_home as _get_home
-        _profile_name = os.environ.get("HERMES_PROFILE") or ""
+        # 從 process command line 或 env 解析 profile 名稱
+        _profile_name = ""
+        _env_profile = os.environ.get("HERMES_PROFILE", "")
+        if _env_profile:
+            _profile_name = _env_profile
+        else:
+            # 從 /proc/self/cmdline 解析 --profile <name>
+            try:
+                with open("/proc/self/cmdline") as _f:
+                    _args = _f.read().split("\0")
+                for i, a in enumerate(_args):
+                    if a == "--profile" and i + 1 < len(_args):
+                        _profile_name = _args[i + 1].strip()
+                        break
+            except Exception:
+                pass
+
         if _profile_name:
             _config_path = os.path.join(_get_home(), "profiles", _profile_name, "config.yaml")
         else:
@@ -3889,8 +3905,8 @@ def run_conversation(
                     from high_llm_loop import call_llm as _dl_call, get_high_llm_config as _dl_hcfg, get_provider_url_and_key as _dl_puk, build_api_url as _dl_burl
                     _dl_cfg = _dl_hcfg(_profile_name or "default")
                     if _dl_cfg.get("enabled") and _dl_cfg.get("force"):
-                        _dl_p = _dl_puk(_dl_cfg["provider"], _profile_name or "default")
-                        _dl_url = _dl_burl(_dl_p["base_url"])
+                        _dl_p = _dl_puk(_dl_cfg.get("provider", "gemini-web2api"), _profile_name or "default")
+                        _dl_url = _dl_burl(_dl_p.get("base_url", "http://127.0.0.1:4981/v1"))
                         # Collect last tool results
                         _dl_results = []
                         for _m in reversed(messages):
