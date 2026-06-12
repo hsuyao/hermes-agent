@@ -3906,12 +3906,19 @@ def run_conversation(
                     from high_llm_loop import call_llm as _dl_call, get_high_llm_config as _dl_hcfg, get_provider_url_and_key as _dl_puk, build_api_url as _dl_burl
                     _dl_cfg = _dl_hcfg(_profile_name or "default")
                     if _dl_cfg.get("enabled") and _dl_cfg.get("force"):
-                        logger.info("dual-layer: feedback loop triggered (profile=%s, tool_results=%d)", 
-                                     _profile_name or "default", 
-                                     sum(1 for _m in messages if _m.get("role") == "tool"))
+                        logger.info("dual-layer: feedback loop triggered (profile=%s, tool_results=%d)",
+                                    _profile_name or "default",
+                                    sum(1 for _m in messages if _m.get("role") == "tool"))
                         _dl_p = _dl_puk(_dl_cfg.get("provider", "gemini-web2api"), _profile_name or "default")
                         _dl_url = _dl_burl(_dl_p.get("base_url", "http://127.0.0.1:4981/v1"))
-                        # Collect last tool results
+
+                        # Shared compression summary: same abstracted view Low-LLM uses
+                        _shared_summary = ""
+                        for _sm in reversed(messages):
+                            if _sm.get("role") == "system" and _sm.get("content"):
+                                _shared_summary = str(_sm.get("content", ""))[:1200]
+                                break
+
                         _dl_results = []
                         for _m in reversed(messages):
                             if _m.get("role") == "tool":
@@ -3919,11 +3926,23 @@ def run_conversation(
                             elif _m.get("role") == "assistant" and _m.get("tool_calls"):
                                 break
                         if _dl_results:
-                            _dl_combined = "\n\n".join(_dl_results[:_dl_cfg.get("max_turns", 3)])
+                            _max_results = int(_dl_cfg.get("max_feedback_results", 3))
+                            _dl_combined = "\n\n".join(_dl_results[:_max_results])
+                            _tool_sequence = []
+                            for _m in messages:
+                                if _m.get("role") == "assistant" and _m.get("tool_calls"):
+                                    _names = []
+                                    for _c in _m["tool_calls"]:
+                                        _fn = _c.get("function", {}) if isinstance(_c, dict) else {}
+                                        _names.append(_fn.get("name") or _c.get("name") or "?")
+                                    _tool_sequence.extend(_names)
                             _dl_prompt = f"""你是策略分析師。
 
-原始需求：{original_user_message or user_message}
+【context 摘要（跟 Low-LLM 共用）】
+{_shared_summary[:1200] or '（無）'}
 
+原始需求：{original_user_message or user_message}
+已執行工具序列：{_tool_sequence[-5:]}
 最新工具執行結果：
 {_dl_combined}
 
@@ -3939,6 +3958,8 @@ def run_conversation(
                             _dl_analysis = _dl_resp["choices"][0]["message"]["content"]
                             if not _dl_analysis.startswith("[完成]"):
                                 _dual_feedback = f"## Gemini 策略反饋\n\n{_dl_analysis}"
+                            else:
+                                agent._dual_feedback_count = getattr(agent, "_dual_feedback_count", 0)
                 except Exception:
                     pass  # dual-layer feedback must not block conversation
 
