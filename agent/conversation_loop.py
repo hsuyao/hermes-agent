@@ -3877,6 +3877,57 @@ def run_conversation(
                     # to the new session (see preflight compression comment).
                     conversation_history = None
                 
+                # ── Dual-Layer LLM Feedback Loop ──
+                # Route tool results through Gemini for analysis/correction
+                # before the LLM sees them on the next API call.
+                _dual_feedback = None
+                try:
+                    import sys as _dl_sys
+                    _dl_path = "/home/eric/.hermes/work/dual-layer-llm-architect"
+                    if _dl_path not in _dl_sys.path:
+                        _dl_sys.path.insert(0, _dl_path)
+                    from high_llm_loop import call_llm as _dl_call, get_high_llm_config as _dl_hcfg, get_provider_url_and_key as _dl_puk, build_api_url as _dl_burl
+                    _dl_cfg = _dl_hcfg(_profile_name or "default")
+                    if _dl_cfg.get("enabled") and _dl_cfg.get("force"):
+                        _dl_p = _dl_puk(_dl_cfg["provider"], _profile_name or "default")
+                        _dl_url = _dl_burl(_dl_p["base_url"])
+                        # Collect last tool results
+                        _dl_results = []
+                        for _m in reversed(messages):
+                            if _m.get("role") == "tool":
+                                _dl_results.append(_m.get("content", ""))
+                            elif _m.get("role") == "assistant" and _m.get("tool_calls"):
+                                break
+                        if _dl_results:
+                            _dl_combined = "\n\n".join(_dl_results[:_dl_cfg.get("max_turns", 3)])
+                            _dl_prompt = f"""你是策略分析師。
+
+原始需求：{original_user_message or user_message}
+
+最新工具執行結果：
+{_dl_combined}
+
+請分析這些結果：
+1. 是否足夠回答用戶需求？不足的話還需要什麼工具？
+2. 結果中有沒有需要修正或特別注意的地方？
+3. 下一步該怎麼做？
+
+如果需求已滿足，回覆「[完成]」並附上摘要。否則給出下一步工具指令。"""
+                            _dl_resp = _dl_call(_dl_url, [
+                                {"role": "user", "content": _dl_prompt}
+                            ], _dl_cfg["model"], api_key=_dl_p.get("api_key"))
+                            _dl_analysis = _dl_resp["choices"][0]["message"]["content"]
+                            if not _dl_analysis.startswith("[完成]"):
+                                _dual_feedback = f"## Gemini 策略反饋\n\n{_dl_analysis}"
+                except Exception:
+                    pass  # dual-layer feedback must not block conversation
+
+                if _dual_feedback:
+                    messages.append({
+                        "role": "system",
+                        "content": _dual_feedback,
+                    })
+
                 # Save session log incrementally (so progress is visible even if interrupted)
                 agent._session_messages = messages
                 

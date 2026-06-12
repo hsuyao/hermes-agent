@@ -27,6 +27,25 @@ if HIGH_LLM_LOOP_PATH not in sys.path:
 from tools.registry import registry
 
 
+def _track_call(profile, question, result_json):
+    import time
+    path = "/home/eric/.hermes/logs/dual_layer_usage.jsonl"
+    try:
+        data = json.loads(result_json) if isinstance(result_json, str) else result_json
+        record = {
+            "ts": int(time.time()),
+            "profile": profile,
+            "status": data.get("status", "unknown"),
+            "elapsed_s": round(time.time() - data.get("_start", time.time()), 2),
+            "history_len": len(data.get("history", [])),
+            "question_prefix": (question or "")[:80],
+        }
+        with open(path, "a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def check_requirements() -> bool:
     """檢查所需套件已安裝"""
     try:
@@ -52,13 +71,13 @@ def dual_layer_loop(
     Returns:
         JSON 字串，包含 status、result、history
     """
+    import time
     try:
         from high_llm_loop import high_llm_loop
 
         tools = json.loads(tools_json)
         result = high_llm_loop(question, tools, profile)
         return json.dumps(result, ensure_ascii=False)
-
     except Exception as e:
         return json.dumps({
             "status": "error",
