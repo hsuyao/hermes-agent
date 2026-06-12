@@ -73,6 +73,8 @@ _HERMES_CORE_TOOLS = [
     "kanban_unblock",
     # Computer use (macOS, gated on cua-driver being installed via check_fn)
     "computer_use",
+    # Dual-Layer LLM Loop (Gemini planning + Low-LLM execution)
+    "dual_layer_loop",
 ]
 
 # Webhook events may originate from untrusted third-party content (for example,
@@ -167,6 +169,12 @@ TOOLSETS = {
     "skills": {
         "description": "Access, create, edit, and manage skill documents with specialized instructions and knowledge",
         "tools": ["skills_list", "skill_view", "skill_manage"],
+        "includes": []
+    },
+    
+    "dual-layer": {
+        "description": "Dual-Layer LLM: Gemini plans strategy, Low-LLM executes tools. For complex multi-step tasks.",
+        "tools": ["dual_layer_loop"],
         "includes": []
     },
     
