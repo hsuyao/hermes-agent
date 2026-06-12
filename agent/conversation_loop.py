@@ -432,6 +432,55 @@ def run_conversation(
     _plugin_user_context = _ctx.plugin_user_context
     _ext_prefetch_cache = _ctx.ext_prefetch_cache
 
+    # ── Dual-Layer LLM Auto-Trigger ──────────────────────────────────
+    # When high_llm_loop.force=true, the first layer (Gemini) analyzes
+    # the user question and produces tool instructions. These are injected
+    # as a system message so the LLM sees them before its first response.
+    _dual_layer_msg = None
+    try:
+        from hermes_constants import get_hermes_home as _get_home
+        _profile_name = os.environ.get("HERMES_PROFILE") or ""
+        if _profile_name:
+            _config_path = os.path.join(_get_home(), "profiles", _profile_name, "config.yaml")
+        else:
+            _config_path = os.path.join(_get_home(), "config.yaml")
+        if os.path.exists(_config_path):
+            import yaml
+            with open(_config_path) as _f:
+                _cfg = yaml.safe_load(_f)
+            _hl = (_cfg or {}).get("high_llm_loop", {})
+            if _hl.get("enabled") and _hl.get("force"):
+                import sys as _sys
+                _dl_path = "/home/eric/.hermes/work/dual-layer-llm-architect"
+                if _dl_path not in _sys.path:
+                    _sys.path.insert(0, _dl_path)
+                from high_llm_loop import high_llm_loop as _hl_loop
+                _available = [
+                    {"name": t, "description": ""}
+                    for t in (agent.valid_tool_names or [])
+                ]
+                _hl_result = _hl_loop(user_message, _available, _profile_name or "default")
+                if _hl_result.get("status") in ("solved", "max_turns"):
+                    _history = _hl_result.get("history", [])
+                    if _history:
+                        _last = _history[-1]
+                        _plan = _last.get("plan", "")
+                        _tool_call = _last.get("tool_call", "")
+                        _dual_layer_msg = (
+                            f"## 策略分析結果（Gemini）\n\n"
+                            f"{_plan}\n\n"
+                            f"### 工具指令\n\n"
+                            f"```json\n{_tool_call}\n```"
+                        )
+    except Exception:
+        pass  # dual-layer failure must not block conversation
+
+    if _dual_layer_msg:
+        messages.insert(-1, {
+            "role": "system",
+            "content": _dual_layer_msg,
+        })
+
     # Main conversation loop counters (pure locals consumed by the loop below).
     api_call_count = 0
     final_response = None
