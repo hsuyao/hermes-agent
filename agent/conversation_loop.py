@@ -437,6 +437,7 @@ def run_conversation(
     # the user question and produces tool instructions. These are injected
     # as a system message so the LLM sees them before its first response.
     _dual_layer_msg = None
+    _tool_result_msg = None
     try:
         from hermes_constants import get_hermes_home as _get_home
         # 從 process command line 或 env 解析 profile 名稱
@@ -456,17 +457,26 @@ def run_conversation(
             except Exception:
                 pass
 
-        if _profile_name:
-            _config_path = os.path.join(_get_home(), "profiles", _profile_name, "config.yaml")
+        # Resolve config path — when hermes_home_override is set to the profile dir
+        # (e.g. /home/eric/.hermes/profiles/video), do NOT double-join "profiles/<name>".
+        _home = _get_home()
+        _home_parts = _home.parts if hasattr(_home, 'parts') else str(_home).split(os.sep)
+        if _profile_name and tuple(_home_parts[-2:]) == ("profiles", _profile_name):
+            _config_path = os.path.join(_home, "config.yaml")
+        elif _profile_name:
+            _config_path = os.path.join(_home, "profiles", _profile_name, "config.yaml")
         else:
-            _config_path = os.path.join(_get_home(), "config.yaml")
+            _config_path = os.path.join(_home, "config.yaml")
         if os.path.exists(_config_path):
             import yaml
             with open(_config_path) as _f:
                 _cfg = yaml.safe_load(_f)
             _hl = (_cfg or {}).get("high_llm_loop", {})
             if _hl.get("enabled") and _hl.get("force"):
-                logger.info("dual-layer: pre-loop inject triggered (profile=%s)", _profile_name)
+                logger.info(
+                    "dual-layer: pre-loop inject triggered (profile=%s, enabled=%s, force=%s, high_llm_model=%s)",
+                    _profile_name, _hl.get("enabled"), _hl.get("force"), _hl.get("high_llm_model"),
+                )
                 import sys as _sys
                 _dl_path = "/home/eric/.hermes/work/dual-layer-llm-architect"
                 if _dl_path not in _sys.path:
@@ -482,21 +492,48 @@ def run_conversation(
                     if _history:
                         _last = _history[-1]
                         _plan = _last.get("plan", "")
-                        _tool_call = _last.get("tool_call", "")
+                        _tool_call_raw = _last.get("tool_call", "")
+                        _tool_call = None
+                        _tool_result_msg = None
+                        if _tool_call_raw:
+                            try:
+                                _tc = json.loads(_tool_call_raw)
+                                if isinstance(_tc, dict) and "name" in _tc:
+                                    _tool_call = _tc
+                            except Exception:
+                                pass
+                        if _tool_call:
+                            try:
+                                from model_tools import handle_function_call
+                                _tr = handle_function_call(
+                                    _tool_call["name"],
+                                    _tool_call.get("parameters", _tool_call.get("arguments", {})),
+                                    task_id=None,
+                                )
+                                _tool_result_msg = {
+                                    "role": "tool",
+                                    "content": str(_tr),
+                                }
+                            except Exception as _e:
+                                _tool_result_msg = {
+                                    "role": "tool",
+                                    "content": f"[dual-layer tool error] {_e}",
+                                }
                         _dual_layer_msg = (
-                            f"## 策略分析結果（Gemini）\n\n"
+                            f"## 策略規劃（Gemini）\n\n"
                             f"{_plan}\n\n"
-                            f"### 工具指令\n\n"
-                            f"```json\n{_tool_call}\n```"
+                            f"請根據上述策略執行。下方已附上工具執行結果，請直接回覆最终答案。"
                         )
     except Exception:
-        pass  # dual-layer failure must not block conversation
+        logger.exception("dual-layer: pre-loop inject failed (profile=%s)", _profile_name or 'unknown')
 
     if _dual_layer_msg:
         messages.insert(-1, {
             "role": "system",
             "content": _dual_layer_msg,
         })
+        if _tool_result_msg:
+            messages.insert(-1, _tool_result_msg)
 
     # Main conversation loop counters (pure locals consumed by the loop below).
     api_call_count = 0
@@ -3961,7 +3998,7 @@ def run_conversation(
                             else:
                                 agent._dual_feedback_count = getattr(agent, "_dual_feedback_count", 0)
                 except Exception:
-                    pass  # dual-layer feedback must not block conversation
+                    logger.exception("dual-layer: feedback loop failed (profile=%s)", _profile_name or 'unknown')
 
                 if _dual_feedback:
                     messages.append({
